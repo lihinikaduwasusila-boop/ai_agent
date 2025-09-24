@@ -1,0 +1,3 @@
+2025-09-24 00:05:29,165 - WARNING - RA Check: Summarizer not available; fallback in use. Reason: No module named 'transformers'
+2025-09-24 00:05:47,903 - WARNING - RA Check: language_tool disabled: No module named 'language_tool_python'
+2025-09-24 00:05:47,909 - WARNING - RA Check: MySQL init failed on startup; continuing without cache. Error: (2003, "Can't connect to MySQL server on '127.0.0.1'")

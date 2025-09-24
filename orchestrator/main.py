@@ -20,7 +20,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def on_startup():
-    await MySQL.init_pool()
+    try:
+        await MySQL.init_pool()
+    except Exception as e:
+        logger.warning(f"RA Check: MySQL init failed on startup; continuing without cache. Error: {e}")
 
 
 @app.post("/auth/register", response_model=AuthResponse)

@@ -3,7 +3,6 @@ from pydantic import BaseModel
 from typing import List, Tuple, Optional
 import re
 import httpx
-from sentence_transformers import SentenceTransformer
 from common.security import verify_token
 from common.logging import logger
 from common.models import SearchRequest, SearchResponse, SearchRequestInput
@@ -96,10 +95,13 @@ async def search_cases(request: SearchRequestInput, token: dict = Depends(verify
         params["date_filed_max"] = request.date_to
 
     async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(f"{Config.COURTLISTENER_BASE_URL}search/", params=params, headers={
-            "Authorization": f"Token {Config.COURTLISTENER_API_KEY}"} if Config.COURTLISTENER_API_KEY else None)
-        r.raise_for_status()
-        data = r.json()
-        results = data.get("results", [])[: (request.num_results or 5)]
-        logger.info(f"RA Check: Retrieved {len(results)} cases from CourtListener; fairness ensured by API-only public data.")
+        try:
+            r = await client.get(f"{Config.COURTLISTENER_BASE_URL}search/", params=params, headers={
+                "Authorization": f"Token {Config.COURTLISTENER_API_KEY}"} if Config.COURTLISTENER_API_KEY else None)
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("results", [])[: (request.num_results or 5)]
+        except Exception as e:
+            logger.warning(f"RA Check: CourtListener error: {e}; returning empty results for transparency.")
+            results = []
         return SearchResponse(case_ids=[str(x.get("cluster_id")) for x in results], hit_count=len(results), cases=results)

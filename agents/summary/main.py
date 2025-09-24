@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
-from transformers import pipeline, AutoTokenizer
 import httpx
 import re
 import asyncio
@@ -30,13 +29,15 @@ class SummaryResponse(BaseModel):
     summary: Dict
 
 
+summarizer = None
 try:
+    from transformers import pipeline, AutoTokenizer  # type: ignore
     model_name = "sshleifer/distilbart-cnn-6-6"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     summarizer = pipeline("summarization", model=model_name, tokenizer=tokenizer, device=-1)
 except Exception as e:
     summarizer = None
-    logger.warning("RA Check: Summarizer not available; will fallback to heuristic summary.")
+    logger.warning(f"RA Check: Summarizer not available; fallback in use. Reason: {e}")
 
 
 def clean_text(t: str) -> str:
