@@ -24,3 +24,8 @@ class Config:
     MYSQL_USER = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB = os.getenv("MYSQL_DB", "legal_research")
+
+    # Optional external sources
+    CAP_BASE_URL = os.getenv("CAP_BASE_URL", "")
+    CAP_API_KEY = os.getenv("CAP_API_KEY", "")
+    OYEZ_BASE_URL = os.getenv("OYEZ_BASE_URL", "")
