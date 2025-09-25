@@ -3,6 +3,7 @@ import httpx
 import language_tool_python
 from typing import List
 from common.models import QueryRequest, QueryResponse, SearchRequest, SearchResponse, SummaryResponse, CitationResponse, PrecedentResponse, Case
+from common.sources import enrich_case_text
 from common.config import Config
 from common.logging import logger
 from common.security import verify_token
@@ -55,9 +56,12 @@ async def query_router(req: QueryRequest, request: Request, token: dict = Depend
             case_id = str(case_data.get("cluster_id") or case_data.get("id") or case_data.get("case_id", ""))
             if not case_id:
                 continue
+            # Enrich text once and pass downstream to avoid agents re-fetching
+            enriched = await enrich_case_text(case_id, fallback_text=case_data.get("text"))
+            case_text = enriched.get("text", "")
             sum_res = await client.post(
                 f"{Config.SUMMARY_URL}/summarize",
-                json={"case_id": case_id, "case_data": case_data},
+                json={"case_id": case_id, "case_data": case_data, "case_text": case_text},
                 headers={"Authorization": auth_header},
             )
             sum_res.raise_for_status()
@@ -65,7 +69,7 @@ async def query_router(req: QueryRequest, request: Request, token: dict = Depend
 
             cit_res = await client.post(
                 f"{Config.CITATION_URL}/extract_citations",
-                json={"case_id": case_id, "case_data": case_data},
+                json={"case_id": case_id, "case_data": case_data, "case_text": case_text},
                 headers={"Authorization": auth_header},
             )
             cit_res.raise_for_status()
@@ -74,7 +78,7 @@ async def query_router(req: QueryRequest, request: Request, token: dict = Depend
 
             prec_res = await client.post(
                 f"{Config.PRECEDENT_URL}/find_precedents",
-                json={"case_id": case_id, "citations": cit_list},
+                json={"case_id": case_id, "citations": cit_list, "case_text": case_text},
                 headers={"Authorization": auth_header},
             )
             prec_res.raise_for_status()

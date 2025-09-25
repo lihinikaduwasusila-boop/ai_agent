@@ -4,6 +4,7 @@ from typing import List, Tuple, Optional
 import re
 import httpx
 from sentence_transformers import SentenceTransformer
+import numpy as np
 from common.security import verify_token
 from common.logging import logger
 from common.models import SearchRequest, SearchResponse, SearchRequestInput
@@ -96,10 +97,36 @@ async def search_cases(request: SearchRequestInput, token: dict = Depends(verify
         params["date_filed_max"] = request.date_to
 
     async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(f"{Config.COURTLISTENER_BASE_URL}search/", params=params, headers={
-            "Authorization": f"Token {Config.COURTLISTENER_API_KEY}"} if Config.COURTLISTENER_API_KEY else None)
+        r = await client.get(
+            f"{Config.COURTLISTENER_BASE_URL}search/",
+            params=params,
+            headers={"Authorization": f"Token {Config.COURTLISTENER_API_KEY}"} if Config.COURTLISTENER_API_KEY else None,
+        )
         r.raise_for_status()
         data = r.json()
-        results = data.get("results", [])[: (request.num_results or 5)]
-        logger.info(f"RA Check: Retrieved {len(results)} cases from CourtListener; fairness ensured by API-only public data.")
-        return SearchResponse(case_ids=[str(x.get("cluster_id")) for x in results], hit_count=len(results), cases=results)
+        results = data.get("results", [])
+
+        # Rerank by semantic similarity to the query bag
+        query_text = params["q"]
+        try:
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+            qv = model.encode([query_text])[0]
+            cand_texts = [
+                f"{x.get('caseName') or x.get('case_name','')} {x.get('text','') or ''} {x.get('html','') or ''}" for x in results
+            ]
+            cand_vecs = model.encode(cand_texts)
+            sims = []
+            for i, v in enumerate(cand_vecs):
+                denom = (np.linalg.norm(qv) * np.linalg.norm(v)) or 1.0
+                sims.append((i, float(qv @ v / denom)))
+            sims.sort(key=lambda t: t[1], reverse=True)
+            top_k = min(len(results), request.num_results or 5)
+            selected = [results[i] for i, _ in sims[:top_k]]
+        except Exception as e:
+            logger.info(f"Embedding rerank skipped: {e}")
+            selected = results[: (request.num_results or 5)]
+
+        logger.info(
+            f"RA Check: Retrieved {len(selected)} cases from CourtListener; fairness ensured by API-only public data."
+        )
+        return SearchResponse(case_ids=[str(x.get("cluster_id")) for x in selected], hit_count=len(selected), cases=selected)

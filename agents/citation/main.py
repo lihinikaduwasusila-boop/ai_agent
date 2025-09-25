@@ -2,10 +2,11 @@ from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 import re
 import httpx
-from typing import List
+from typing import List, Optional, Dict
 from common.security import verify_token
 from common.logging import logger
 from common.config import Config
+from common.sources import enrich_case_text
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Citation Agent")
@@ -21,6 +22,8 @@ app.add_middleware(
 
 class CitationRequest(BaseModel):
     case_id: str
+    case_text: Optional[str] = None
+    case_data: Optional[Dict] = None
 
 
 class CitationResponse(BaseModel):
@@ -64,7 +67,8 @@ def extract_citations(text: str) -> List[str]:
 async def extract(req: CitationRequest, token: dict = Depends(verify_token)):
     if not req.case_id:
         raise HTTPException(status_code=400, detail="case_id required")
-    text = await fetch_case_text(req.case_id)
+    enriched = await enrich_case_text(req.case_id, fallback_text=req.case_text or (req.case_data or {}).get("text"))
+    text = enriched.get("text") or await fetch_case_text(req.case_id)
     if not text:
         logger.info("RA Check: No text for citation extraction; transparency ensured, no fabrication.")
         return CitationResponse(citations=[])

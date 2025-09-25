@@ -4,10 +4,12 @@ from transformers import pipeline, AutoTokenizer
 import httpx
 import re
 import asyncio
-from typing import Dict
+from typing import Dict, Optional
 from common.security import verify_token
 from common.logging import logger
 from common.config import Config
+from common.sources import enrich_case_text
+import spacy
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Summary Agent")
@@ -24,6 +26,7 @@ app.add_middleware(
 class SummaryRequest(BaseModel):
     case_id: str
     case_data: Dict | None = None
+    case_text: Optional[str] = None
 
 
 class SummaryResponse(BaseModel):
@@ -37,6 +40,11 @@ try:
 except Exception as e:
     summarizer = None
     logger.warning("RA Check: Summarizer not available; will fallback to heuristic summary.")
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except Exception:
+    nlp = None
 
 
 def clean_text(t: str) -> str:
@@ -61,19 +69,44 @@ async def fetch_case_text(case_id: str) -> str:
         return clean_text(text)
 
 
+def extract_entities(text: str) -> Dict:
+    if not nlp or not text:
+        return {"persons": [], "organizations": [], "locations": []}
+    doc = nlp(text[:5000])
+    out = {"persons": [], "organizations": [], "locations": []}
+    for ent in doc.ents:
+        if ent.label_ == "PERSON":
+            out["persons"].append(ent.text)
+        elif ent.label_ == "ORG":
+            out["organizations"].append(ent.text)
+        elif ent.label_ == "GPE":
+            out["locations"].append(ent.text)
+    return out
+
+
 @app.post("/summarize", response_model=SummaryResponse)
 async def summarize(req: SummaryRequest, token: dict = Depends(verify_token)):
     if not req.case_id:
         raise HTTPException(status_code=400, detail="case_id required")
-    text = await fetch_case_text(req.case_id)
-    if not text:
-        logger.info("RA Check: No text available; returning transparent fallback message.")
-        return SummaryResponse(summary={"case": req.case_id, "court": "Unknown", "issue": "No text available", "decision": "Unknown"})
+
+    # Prefer provided text; otherwise enrich via multi-source
+    enriched = await enrich_case_text(req.case_id, fallback_text=req.case_text or (req.case_data or {}).get("text"))
+    text = enriched.get("text") or await fetch_case_text(req.case_id)
+
+    case_name = (req.case_data or {}).get("caseName") or (req.case_data or {}).get("case_name") or req.case_id
+    court = (req.case_data or {}).get("court_citation_string") or (req.case_data or {}).get("court_name") or "Unknown"
+    decision = (req.case_data or {}).get("disposition") or "Unknown"
+
+    if not text or len(text) < 80:
+        logger.info("RA Check: Insufficient text; returning concise factual fallback.")
+        return SummaryResponse(summary={"case": case_name, "court": court, "issue": "Insufficient text to summarize.", "decision": decision})
+
+    # Summarize in chunks for robustness
+    chunk = text[:2200]
     if summarizer is None:
-        snippet = text[:400]
-        return SummaryResponse(summary={"case": req.case_id, "court": "Unknown", "issue": snippet, "decision": "Unknown"})
-    # Summarize first 800 tokens approx
-    chunk = text[:2000]
-    out = summarizer(chunk, max_length=130, min_length=40, do_sample=False)[0]["summary_text"]
-    logger.info("RA Check: Summary generated; transparency via model use disclosure; ethical handling using public text only.")
-    return SummaryResponse(summary={"case": req.case_id, "court": "Unknown", "issue": out, "decision": "Unknown"})
+        out = chunk[:400]
+    else:
+        out = summarizer(chunk, max_length=160, min_length=60, do_sample=False)[0]["summary_text"]
+
+    entities = extract_entities(text)
+    return SummaryResponse(summary={"case": case_name, "court": court, "issue": out, "decision": decision, "entities": entities})
